@@ -338,44 +338,44 @@ async def login_and_upscale_image(
             pass
         print("  Login complete.")
 
-    # Dismiss any welcome/onboarding dialogues
-    await dismiss_dialogs(page)
+        # Dismiss any welcome/onboarding dialogues
+        await dismiss_dialogs(page)
 
-    # Navigate to My Studio
-    print(f"  Going to My Studio ...")
-    studio_selectors = [
-        'text="My studio"', 'a:has-text("My studio")',
-        'button:has-text("My studio")', 'a[href*="/workspace"]', 'a[href*="/studio"]'
-    ]
-    
-    # Wait dynamically for one of the selectors to become visible
-    studio_loc = None
-    for _ in range(20): # max 10 seconds wait (20 * 500ms)
-        for sel in studio_selectors:
+        # Navigate to My Studio
+        print(f"  Going to My Studio ...")
+        studio_selectors = [
+            'text="My studio"', 'a:has-text("My studio")',
+            'button:has-text("My studio")', 'a[href*="/workspace"]', 'a[href*="/studio"]'
+        ]
+        
+        # Wait dynamically for one of the selectors to become visible
+        studio_loc = None
+        for _ in range(20): # max 10 seconds wait (20 * 500ms)
+            for sel in studio_selectors:
+                try:
+                    loc = page.locator(sel).first
+                    if await loc.is_visible():
+                        studio_loc = loc
+                        break
+                except Exception:
+                    pass
+            if studio_loc:
+                break
+            await page.wait_for_timeout(500)
+
+        if studio_loc:
+            await studio_loc.click()
+        else:
+            # Fallback to try clicking the first one anyway
             try:
-                loc = page.locator(sel).first
-                if await loc.is_visible():
-                    studio_loc = loc
-                    break
+                await page.locator(studio_selectors[0]).first.click()
             except Exception:
                 pass
-        if studio_loc:
-            break
-        await page.wait_for_timeout(500)
 
-    if studio_loc:
-        await studio_loc.click()
-    else:
-        # Fallback to try clicking the first one anyway
         try:
-            await page.locator(studio_selectors[0]).first.click()
+            await page.wait_for_load_state("networkidle", timeout=12000)
         except Exception:
             pass
-
-    try:
-        await page.wait_for_load_state("networkidle", timeout=12000)
-    except Exception:
-        pass
 
     # Upload image
     abs_image_path = os.path.abspath(image_path)
