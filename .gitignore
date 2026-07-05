@@ -1,0 +1,16 @@
+# Python cache
+__pycache__/
+*.pyc
+
+# Local runtime directories
+input_images/
+output_images/
+logs/
+screenshots/
+
+# Local credentials
+credentials.json
+
+# Temp files and archives
+*.zip
+test_output.txt
