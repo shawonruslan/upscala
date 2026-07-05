@@ -1,0 +1,82 @@
+name: VanceAI Bulk Image Upscale
+
+on:
+  workflow_dispatch:
+    inputs:
+      zip_url:
+        description: 'URL of the ZIP file containing input images'
+        required: true
+        type: string
+      scale:
+        description: 'Upscale factor (2x, 4x, 8x)'
+        required: false
+        default: '2x'
+        type: string
+      format:
+        description: 'Output image format (png or jpg)'
+        required: false
+        default: 'png'
+        type: string
+
+jobs:
+  upscale:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONUNBUFFERED: '1'
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests pillow playwright
+
+      - name: Install Playwright Chromium & System Dependencies
+        run: |
+          playwright install --with-deps chromium
+
+      - name: Prepare Workspace Directories
+        run: |
+          mkdir -p input_images
+          mkdir -p output_images
+          mkdir -p logs
+
+      - name: Download and Extract Input Images
+        run: |
+          echo "Downloading ZIP file from ${{ github.event.inputs.zip_url }} ..."
+          curl -L -o input_images.zip "${{ github.event.inputs.zip_url }}"
+          
+          echo "Extracting ZIP contents ..."
+          # -j flattens the directory structure so all images are extracted directly to input_images
+          unzip -q -j input_images.zip -d input_images
+          
+          echo "Cleaning up ZIP ..."
+          rm input_images.zip
+
+      - name: Run Bulk Upscaler
+        run: |
+          python bulk_upscale.py \
+            --input ./input_images \
+            --output ./output_images \
+            --scale "${{ github.event.inputs.scale }}" \
+            --format "${{ github.event.inputs.format }}"
+
+      - name: Create Output ZIP
+        if: always()
+        run: |
+          zip -r -q upscaled_images.zip output_images logs
+
+      - name: Upload Upscaled Images Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: upscaled-images
+          path: upscaled_images.zip
+          retention-days: 7
