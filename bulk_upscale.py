@@ -381,39 +381,28 @@ async def login_and_upscale_image(
     abs_image_path = os.path.abspath(image_path)
     print(f"  Uploading: {os.path.basename(image_path)}")
     try:
-        # Try file chooser first as it simulates real user click and initializes upload handlers correctly
-        trigger_selectors = [
-            '[data-testid="workspace-upload-trigger"]',
-            'text="Click to upload image"'
-        ]
-        upload_trigger = None
-        for sel in trigger_selectors:
-            try:
+        # Initialize event listeners by clicking the upload trigger if visible
+        try:
+            trigger_selectors = [
+                '[data-testid="workspace-upload-trigger"]',
+                'text="Click to upload image"'
+            ]
+            for sel in trigger_selectors:
                 loc = page.locator(sel).first
                 if await loc.is_visible():
-                    upload_trigger = loc
+                    await loc.click(force=True, timeout=1000)
                     break
-            except Exception:
-                continue
-        if not upload_trigger:
-            upload_trigger = page.locator('[data-testid="workspace-upload-trigger"]').first
+        except Exception:
+            pass
 
-        async with page.expect_file_chooser(timeout=3000) as fc_info:
-            await upload_trigger.click(timeout=3000)
-        file_chooser = await fc_info.value
-        await file_chooser.set_files(abs_image_path)
-        print("  Image uploaded successfully via file chooser.")
+        # Directly inject files into the file input element
+        file_input = page.locator('input[type="file"]').first
+        await file_input.wait_for(state="attached", timeout=6000)
+        await file_input.set_input_files(abs_image_path)
+        print("  Image uploaded successfully via direct input injection.")
     except Exception as e:
-        print(f"  File chooser method failed/timed out ({e}), trying direct input injection...")
-        try:
-            # Fallback: Directly inject into input[type="file"]
-            file_input = page.locator('input[type="file"]').first
-            await file_input.wait_for(state="attached", timeout=5000)
-            await file_input.set_input_files(abs_image_path)
-            print("  Image uploaded successfully via direct input.")
-        except Exception as e2:
-            print(f"  Both upload methods failed. Main error: {e2}")
-            raise e2
+        print(f"  Direct upload injection failed: {e}")
+        raise e
 
     # Wait dynamically for upload network requests to settle
     print("  Waiting for upload network requests to settle...")
@@ -742,10 +731,10 @@ def parse_args():
     )
     parser.add_argument(
         "--format", "-f",
-        default="png",
+        default="jpg",
         choices=["png", "jpg"],
         dest="fmt",
-        help="Output image format (default: png)"
+        help="Output image format (default: jpg)"
     )
     return parser.parse_args()
 
