@@ -19,8 +19,87 @@ on:
         type: string
 
 jobs:
-  upscale:
+  split:
     runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Download and Extract ZIP
+        run: |
+          mkdir -p input_images
+          curl -L -o input_images.zip "${{ github.event.inputs.zip_url }}"
+          unzip -q -j input_images.zip -d input_images
+          rm input_images.zip
+
+      - name: Split Images into 5 Chunks
+        run: |
+          python -c '
+          import os, shutil, math
+          from pathlib import Path
+          
+          # Create chunk directories
+          for i in range(5):
+              os.makedirs(f"chunk_{i}", exist_ok=True)
+          
+          SUPPORTED_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+          files = sorted([f for f in Path("input_images").iterdir() if f.is_file() and f.suffix.lower() in SUPPORTED_EXTS])
+          
+          n = len(files)
+          chunk_size = math.ceil(n / 5)
+          for idx, f in enumerate(files):
+              chunk_idx = min(idx // chunk_size, 4)
+              shutil.move(str(f), f"chunk_{chunk_idx}/{f.name}")
+          print(f"Split {n} files into 5 chunks.")
+          '
+
+      - name: Upload Chunk 0
+        uses: actions/upload-artifact@v4
+        with:
+          name: chunk-0
+          path: chunk_0
+          retention-days: 1
+
+      - name: Upload Chunk 1
+        uses: actions/upload-artifact@v4
+        with:
+          name: chunk-1
+          path: chunk_1
+          retention-days: 1
+
+      - name: Upload Chunk 2
+        uses: actions/upload-artifact@v4
+        with:
+          name: chunk-2
+          path: chunk_2
+          retention-days: 1
+
+      - name: Upload Chunk 3
+        uses: actions/upload-artifact@v4
+        with:
+          name: chunk-3
+          path: chunk_3
+          retention-days: 1
+
+      - name: Upload Chunk 4
+        uses: actions/upload-artifact@v4
+        with:
+          name: chunk-4
+          path: chunk_4
+          retention-days: 1
+
+  upscale:
+    needs: split
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        chunk_id: [0, 1, 2, 3, 4]
     env:
       PYTHONUNBUFFERED: '1'
 
@@ -48,17 +127,11 @@ jobs:
           mkdir -p output_images
           mkdir -p logs
 
-      - name: Download and Extract Input Images
-        run: |
-          echo "Downloading ZIP file from ${{ github.event.inputs.zip_url }} ..."
-          curl -L -o input_images.zip "${{ github.event.inputs.zip_url }}"
-          
-          echo "Extracting ZIP contents ..."
-          # -j flattens the directory structure so all images are extracted directly to input_images
-          unzip -q -j input_images.zip -d input_images
-          
-          echo "Cleaning up ZIP ..."
-          rm input_images.zip
+      - name: Download Input Chunk
+        uses: actions/download-artifact@v4
+        with:
+          name: chunk-${{ matrix.chunk_id }}
+          path: input_images
 
       - name: Run Bulk Upscaler
         run: |
@@ -68,13 +141,59 @@ jobs:
             --scale "${{ github.event.inputs.scale }}" \
             --format "${{ github.event.inputs.format }}"
 
-      - name: Create Output ZIP
+      - name: Create Chunk Output ZIP
         if: always()
         run: |
-          zip -r -q upscaled_images.zip output_images logs
+          zip -r -q upscaled_${{ matrix.chunk_id }}.zip output_images logs
 
-      - name: Upload Upscaled Images Artifact
+      - name: Upload Upscaled Chunk Artifact
         if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: upscaled-chunk-${{ matrix.chunk_id }}
+          path: upscaled_${{ matrix.chunk_id }}.zip
+          retention-days: 1
+
+  merge:
+    needs: upscale
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download All Upscaled Chunks
+        uses: actions/download-artifact@v4
+        with:
+          pattern: upscaled-chunk-*
+          path: temp_downloads
+
+      - name: Merge Upscaled Images and Logs
+        run: |
+          mkdir -p final_output
+          mkdir -p merged_logs
+          
+          # Find and extract each zipped chunk
+          find temp_downloads -name "upscaled_*.zip" | while read -r zipfile; do
+            chunk_dir=$(dirname "$zipfile")
+            chunk_name=$(basename "$chunk_dir")
+            mkdir -p "temp_extracted/$chunk_name"
+            unzip -o -q "$zipfile" -d "temp_extracted/$chunk_name"
+            
+            # Move images
+            if [ -d "temp_extracted/$chunk_name/output_images" ]; then
+              mv temp_extracted/$chunk_name/output_images/* final_output/ 2>/dev/null || true
+            fi
+            
+            # Move logs under chunk specific directories
+            if [ -d "temp_extracted/$chunk_name/logs" ]; then
+              mkdir -p "merged_logs/$chunk_name"
+              mv temp_extracted/$chunk_name/logs/* "merged_logs/$chunk_name/" 2>/dev/null || true
+            fi
+          done
+
+      - name: Create Final Output ZIP
+        run: |
+          zip -r -q upscaled_images.zip final_output merged_logs
+
+      - name: Upload Final Upscaled Images Artifact
         uses: actions/upload-artifact@v4
         with:
           name: upscaled-images
