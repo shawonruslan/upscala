@@ -380,6 +380,10 @@ async def login_and_upscale_image(
     # Upload image
     abs_image_path = os.path.abspath(image_path)
     print(f"  Uploading: {os.path.basename(image_path)}")
+    
+    # Dismiss any welcome tour/onboarding modal dialogs
+    await dismiss_dialogs(page)
+    
     try:
         # Initialize event listeners by clicking the upload trigger if visible
         try:
@@ -410,7 +414,16 @@ async def login_and_upscale_image(
         await page.wait_for_load_state("networkidle", timeout=8000)
     except Exception:
         pass
-    await page.wait_for_timeout(2000)
+
+    # Wait dynamically for the Process button to be ready instead of using a static sleep
+    process_btn = page.locator('button:has-text("Process")').first
+    try:
+        await process_btn.wait_for(state="visible", timeout=6000)
+    except Exception:
+        pass
+
+    # Dismiss modals before selecting scale
+    await dismiss_dialogs(page)
 
     # Select scale
     print(f"  Selecting scale {scale} ...")
@@ -421,34 +434,33 @@ async def login_and_upscale_image(
     except Exception as e:
         print(f"  Scale button not found: {e}")
 
+    # Dismiss modals before clicking Process
+    await dismiss_dialogs(page)
+
     # Click Process
     print(f"  Clicking Process ...")
     process_btn = page.locator('button:has-text("Process")').first
     await process_btn.wait_for(state="visible", timeout=6000)
     await process_btn.click()
 
-    # Wait for Save/Download button (up to ~60 seconds, checking every 1s)
+    # Wait for completion (Save/Download button OR error message) dynamically
     print(f"  Processing image ... (waiting for completion)")
     completed = False
-    for i in range(60):
-        await page.wait_for_timeout(1000)
-
-        # Dismiss any upgrade/upsell modal
-        for close_sel in ['button[aria-label="Close"]', 'button:has-text("Maybe later")', 'text="Maybe later"']:
-            try:
-                close_btn = page.locator(close_sel).first
-                if await close_btn.is_visible():
-                    await close_btn.click()
-                    break
-            except Exception:
-                pass
-
-        # Check for Save button
+    try:
+        combined_sel = (
+            'button:has-text("Save"), button:has-text("Download"), '
+            'text="failed to process", text="processing failed", text="limit exceeded", text="upload failed"'
+        )
+        match_loc = page.locator(combined_sel).first
+        await match_loc.wait_for(state="visible", timeout=90000)
+        
         save_btn = page.locator('button:has-text("Save"), button:has-text("Download")').first
         if await save_btn.is_visible():
-            print(f"  Processing done after ~{i + 1}s!")
             completed = True
-            break
+        else:
+            print("  VanceAI reported processing error on the page.")
+    except Exception as e:
+        print(f"  Wait for completion timed out or failed: {e}")
 
     if not completed:
         print("  Warning: Processing may not be complete (Save button not found).")
@@ -463,7 +475,14 @@ async def login_and_upscale_image(
         tmp_download = str(Path(output_path).parent / f"_tmp_download_{random.randint(1000, 9999)}")
 
         async with page.expect_download(timeout=25000) as dl_info:
-            await save_btn.click()
+            try:
+                # Try clicking first (with a short timeout of 5s)
+                await save_btn.click(timeout=5000)
+            except Exception:
+                # If it fails (e.g. pointer intercepted by upsell dialogue), dismiss dialogues and click again
+                print("  Click intercepted or failed, dismissing dialogues and retrying...")
+                await dismiss_dialogs(page)
+                await save_btn.click(timeout=10000)
 
             # Check if format selection popup appears dynamically
             jpg_sel = page.locator('text="JPG", text="jpg"').first
@@ -731,10 +750,10 @@ def parse_args():
     )
     parser.add_argument(
         "--format", "-f",
-        default="jpg",
+        default="png",
         choices=["png", "jpg"],
         dest="fmt",
-        help="Output image format (default: jpg)"
+        help="Output image format (default: png)"
     )
     return parser.parse_args()
 
